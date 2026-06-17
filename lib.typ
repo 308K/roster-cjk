@@ -1,6 +1,10 @@
 // Layout a roster of CJK names in a tidy, aligned grid.
 //
 // The package exposes a single function, `roster-cjk`, documented in README.md.
+// 
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 // Format a single "word" that may carry a ruby annotation written in
 // parentheses, e.g. `小鳥遊(たかなし)` renders 小鳥遊 with the reading たかなし
@@ -36,30 +40,30 @@
 ///
 /// - `names`: An array of name strings.
 /// - `cols`   (default `8`): Number of columns in the grid.
-/// - `min-gap` (default `1.5em`): Horizontal gap between columns.
-/// - `inner-gap` (default `1em`): Gap between the surname / given name / honorific
+/// - `zh-col-width` (default `4.8em`): Width of the column for Chinese names.
+/// - `ja-inner-gap` (default `1em`): Gap between the surname / given name / honorific
 ///   parts of a Japanese name.
+/// - `min-gap` (default `1.5em`): Horizontal gap between columns.
 /// - `row-gutter` (default `1.2em`): Vertical gap between rows.
 /// - `lang` (default `auto`): Force the layout mode. `auto` follows the current
 ///   `text.lang` (`"ja"` selects the Japanese layout, anything else the Chinese one).
 #let roster-cjk(
   names,
   cols: 8,
+  zh-col-width: 4.8em,
+  ja-inner-gap: 1em,
   min-gap: 1.5em,
-  inner-gap: 1em,
   row-gutter: 1.2em,
   lang: auto,
 ) = context {
   let actual-lang = if lang == auto { text.lang } else { lang }
   let CJKV-range = regex("[[\p{scx=Han}\p{scx=Katakana}\p{scx=Hiragana}\p{scx=Hangul}]&&\p{L}]")
-
+  
   let parsed-ja = ()
   let global-max-sei = 0pt
   let global-max-mei = 0pt
   let global-max-kei = 0pt
-
-  // Japanese names follow a `姓(sei) 名(mei) 敬称(keishou)` layout. Measure each
-  // part once so that every name in the grid can share the same column widths.
+  
   if actual-lang == "ja" {
     for name in names {
       let parts = name.split(regex("[\s\u{2003}]+"))
@@ -72,35 +76,38 @@
       } else if parts.len() == 2 {
         raw-keishou = parts.at(1)
       }
-
+      
       let sei = format-with-ruby(raw-sei)
       let mei = format-with-ruby(raw-mei)
       let keishou = format-with-ruby(raw-keishou)
-
+      
       let w-sei = measure(sei).width
       let w-mei = measure(mei).width
       let w-kei = measure(keishou).width
-
+      
       parsed-ja.push((sei: sei, mei: mei, keishou: keishou, w-sei: w-sei, w-mei: w-mei, w-kei: w-kei))
-
+      
       global-max-sei = calc.max(global-max-sei, w-sei)
       global-max-mei = calc.max(global-max-mei, w-mei)
       global-max-kei = calc.max(global-max-kei, w-kei)
     }
   }
-
-  let sep-width = measure(h(inner-gap)).width
-
+  
+  let sep-width = measure(h(ja-inner-gap)).width
   let items-info = ()
-  let normal-widths = ()
-
-  // Measure every name and decide how many columns it needs to span.
+  
+  let base-width = if actual-lang == "ja" {
+    global-max-sei + global-max-mei + global-max-kei + (sep-width * 2)
+  } else {
+    measure(box(width: zh-col-width)).width
+  }
+  
+  let gutter-width = measure(box(width: min-gap)).width
+  
   for i in range(names.len()) {
     let name = names.at(i)
     if actual-lang == "ja" {
-      let w = global-max-sei + global-max-mei + global-max-kei + (sep-width * 2)
-      items-info.push((type: "ja", width: w))
-      normal-widths.push(w)
+      items-info.push((type: "ja", width: base-width))
     } else {
       let core-name = name
       let suffix = ""
@@ -111,49 +118,40 @@
       } else {
         core-name = name.trim()
       }
-
+      
       let core-chars = core-name.clusters()
       let display-text = core-name
-      // A two-character CJK name is spread out to a fixed width so the two
-      // characters sit at the edges of the column, matching the look of a
-      // three-character name.
+      
       if core-chars.len() == 2 and core-name.match(CJKV-range) != none {
         display-text = box(width: 3em, core-chars.at(0) + h(1fr) + core-chars.at(1))
       }
+      
       let final-display = [#display-text#suffix]
       let w = measure(final-display).width
-
-      let is-normal = core-chars.len() <= 6
-      items-info.push((type: "zh", display: final-display, width: w, is-normal: is-normal))
-      if is-normal { normal-widths.push(w) }
+      
+      items-info.push((type: "zh", display: final-display, width: w))
     }
   }
-
-  let base-width = if normal-widths.len() > 0 { calc.max(..normal-widths) } else { 4em }
-  let gutter-width = measure(box(width: min-gap)).width
-
-  // Greedily assign each name a column position and a colspan, wrapping to a
-  // new row when the name no longer fits on the current line.
+  
   let layout-results = ()
   let current-col = 0
   for i in range(names.len()) {
     let info = items-info.at(i)
     let item-width = info.width
     let span = 1
+    
     if item-width > base-width + 0.1pt {
       span = calc.ceil((item-width + gutter-width) / (base-width + gutter-width))
     }
     span = calc.min(span, cols)
-
+    
     let remaining-cols = cols - current-col
     if span > remaining-cols { current-col = 0 }
-
+    
     layout-results.push((col: current-col, span: span))
     current-col = calc.rem(current-col + span, cols)
   }
-
-  // For Japanese, align the three parts within a column by recomputing the
-  // widest part *per column* (so adjacent short names don't waste space).
+  
   let col-max-sei = range(cols).map(c => {
     let max-w = 0pt
     for i in range(names.len()) {
@@ -163,7 +161,7 @@
     }
     return max-w
   })
-
+  
   let col-max-mei = range(cols).map(c => {
     let max-w = 0pt
     for i in range(names.len()) {
@@ -173,7 +171,7 @@
     }
     return max-w
   })
-
+  
   let col-max-kei = range(cols).map(c => {
     let max-w = 0pt
     for i in range(names.len()) {
@@ -183,21 +181,21 @@
     }
     return max-w
   })
-
+  
   let cells = ()
   current-col = 0
-
+  
   for i in range(names.len()) {
     let info = items-info.at(i)
     let lay = layout-results.at(i)
     let span = lay.span
     let final-display = []
-
+    
     if info.type == "ja" {
       let c = lay.col
       let p = parsed-ja.at(i)
-      let part-sep = h(inner-gap)
-
+      let part-sep = h(ja-inner-gap)
+      
       final-display = {
         box(width: col-max-sei.at(c), align(left, p.sei))
         part-sep
@@ -210,17 +208,17 @@
     } else {
       final-display = info.display
     }
-
+    
     let remaining-cols = cols - current-col
     if span > remaining-cols {
       for _ in range(remaining-cols) { cells.push(grid.cell([])) }
       current-col = 0
     }
-
+    
     cells.push(grid.cell(colspan: span, align(left + horizon, final-display)))
     current-col = calc.rem(current-col + span, cols)
   }
-
+  
   grid(
     columns: (base-width,) * cols,
     column-gutter: min-gap,
